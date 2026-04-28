@@ -64,17 +64,41 @@ valid && ready
 
 ```mermaid
 flowchart LR
-    P[Producer] -->|valid, data| B["Pipeline Register - Elastic Buffer"]
+
+    %% =========================
+    %% DATA PATH
+    %% =========================
+    P[Producer] -->|data| B[Pipeline Register]
     B -->|data| C[Consumer]
+
+    %% =========================
+    %% CONTROL SIGNALS
+    %% =========================
+    P -->|valid| B
     C -->|ready| B
 
-    subgraph Internal Behavior
-        S1["EMPTY state<br/>slot_full = 0"]
-        S2["FULL state<br/>slot_full = 1"]
-    end
+    %% =========================
+    %% STATE MACHINE (TIED TO PIPELINE)
+    %% =========================
+    E[EMPTY slot_full=0] -->|valid| F[FULL slot_full=1]
+    F -->|ready| E
 
-    S1 -->|valid=1| S2
-    S2 -->|ready=1| S1
+    F -.holds data.-> B
+
+    %% =========================
+    %% CORE BEHAVIOR (MATCHES TIMING)
+    %% =========================
+    B -->|valid & ready → transfer| C
+    B -->|valid & !ready → hold| B
+
+    %% =========================
+    %% INVARIANTS (MATCHES SVA)
+    %% =========================
+    I1[Transfer iff valid AND ready]
+    I2[Data stable when valid AND NOT ready]
+
+    I1 --> B
+    I2 --> B
 ```
 
 > Equivalent to a **1-depth elastic buffer / AXI-Stream register slice**
