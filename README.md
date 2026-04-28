@@ -1,82 +1,183 @@
-# SystemVerilog Valid-Ready Pipeline (1-Stage)
+# SystemVerilog Valid-Ready Pipeline Verification
 
-A verified implementation of a **1-stage valid-ready pipeline** in SystemVerilog, including a constrained-random, self-checking testbench.
-
-The design demonstrates correct handling of:
-- Flow control  
-- Backpressure  
-- Transaction ordering  
+A rigorously verified implementation of a **1-stage valid-ready pipeline** in SystemVerilog, supported by a constrained-random, self-checking testbench, **SystemVerilog Assertions (SVA)**, and functional coverage.
 
 ---
 
-## Overview
+## Problem Statement
 
-This design models a **synchronous streaming interface**:
+In synchronous digital systems, **data transfer between producer and consumer modules must be reliable under varying rates of data generation and consumption**.
 
-- `valid` → asserted by producer  
-- `ready` → asserted by consumer  
-- Data transfer occurs only when **both are high**
+A common solution is the **valid-ready handshake protocol**, where:
 
-The DUT implements a single-stage pipeline register with:
-- Backpressure support  
-- No data loss  
-- No data duplication  
-- Deterministic transaction counting  
+* Producer asserts `valid`
+* Consumer asserts `ready`
+* Transfer occurs only when both are high
+
+However, incorrect implementations can lead to:
+
+* Data loss
+* Data duplication
+* Incorrect transaction ordering
+* Failure under backpressure conditions
 
 ---
 
-## Architecture
+## Objective
 
+Design and verify a **backpressure-aware pipeline stage** that guarantees:
 
+* Correct data transfer under all timing conditions
+* No loss or duplication of transactions
+* Deterministic and accurate transaction counting
+* Robust handling of random stalls and backpressure
+
+---
+
+## Why SystemVerilog?
+
+SystemVerilog is used because it provides:
+
+* **Assertions (SVA)** → formal correctness checks
+* **Constrained randomization** → realistic stimulus generation
+* **Coverage-driven verification** → ensures completeness
+* **OOP-based testbench design** → scalable verification architecture
+
+This makes it suitable for **industry-grade verification workflows**.
+
+---
+
+## Design Overview
+
+The DUT implements a **single-entry pipeline register**:
+
+```
 Producer ──(valid,data)──▶ [ Pipeline Stage ] ──▶ Consumer
-◀──── ready ────────
+                          ◀──── ready ────────
+```
 
+### Key Behavior
+
+| Condition         | Action                   |
+| ----------------- | ------------------------ |
+| valid=1 & ready=1 | Transfer occurs          |
+| valid=1 & ready=0 | Data held (backpressure) |
+| valid=0           | No transfer              |
+| Empty + valid=1   | Load new data            |
+
+---
+
+## Key Design Guarantees
+
+* In-order data delivery
+* No overwriting of unconsumed data
+* Stable data during stalls
+* Transaction count increments only on valid transfers
 
 ---
 
 ## Repository Structure
 
-
+```
 sv-pipeline-valid-ready/
 │
 ├── src/
-│ └── pipeline_dut.sv
+│   └── pipeline_dut.sv
 │
 ├── sim/
-│ ├── tb_pipeline.sv
-│ └── transaction.sv
+│   ├── tb_pipeline.sv
+│   └── transaction.sv
 │
 ├── waveform.png
 ├── .gitignore
 └── README.md
-
+```
 
 ---
 
-## Verification Strategy
+## Verification Methodology
 
-The testbench uses a **self-checking constrained-random approach**:
+### 1. Constrained Random Stimulus
 
-### Stimulus
-- Random data values  
-- Random inter-transaction delays  
-- Random consumer backpressure  
+* Random data generation
+* Random inter-transaction delays
+* Random consumer backpressure
 
-### Checking
-- Mailbox-based transaction tracking  
-- Scoreboard comparison (expected vs actual)  
-- Automatic pass/fail reporting  
+### 2. Self-Checking Scoreboard
+
+* Mailbox-based transaction tracking
+* Expected vs actual comparison
+* Automatic pass/fail detection
+
+### 3. SystemVerilog Assertions (SVA)
+
+The following assertions validate protocol correctness:
+
+```systemverilog
+// Transfer must only occur when valid && ready
+property p_handshake;
+  @(posedge clk)
+  cons_valid_out && cons_ready |-> ##0 cons_valid_out;
+endproperty
+assert property (p_handshake);
+
+// Transaction count must increment on valid transfer
+property p_txn_count;
+  @(posedge clk)
+  (cons_valid_out && cons_ready) |-> 
+    (txn_count == $past(txn_count) + 1);
+endproperty
+assert property (p_txn_count);
+
+// Data must remain stable when stalled
+property p_stable_data;
+  @(posedge clk)
+  cons_valid_out && !cons_ready |-> 
+    $stable(cons_data);
+endproperty
+assert property (p_stable_data);
+```
+
+---
+
+### 4. Functional Coverage
+
+Ensures all key scenarios are exercised:
+
+```systemverilog
+covergroup pipeline_cg @(posedge clk);
+
+  coverpoint prod_valid;
+  coverpoint cons_ready;
+
+  // Cross coverage: handshake combinations
+  cross prod_valid, cons_ready;
+
+  // Backpressure scenarios
+  coverpoint cons_ready {
+    bins stall[] = {0};
+    bins ready[] = {1};
+  }
+
+endgroup
+
+pipeline_cg cg = new();
+```
 
 ---
 
 ## Simulation Results
 
-
+```
 SIMULATION COMPLETE
-PASS : 20 / 20
-FAIL : 0 / 20
+PASS     : 20 / 20
+FAIL     : 0 / 20
 DUT COUNT: 20
+```
 
+✔ All randomized transactions passed
+✔ No protocol violations detected
+✔ Assertions satisfied
 
 ---
 
@@ -86,10 +187,10 @@ DUT COUNT: 20
 
 ### Observations
 
-- Correct valid-ready handshake  
-- Data stability during backpressure  
-- No data loss or duplication  
-- `txn_count` increments only on valid transfers  
+* Correct valid-ready handshake
+* Data stability during backpressure
+* No data corruption or misalignment
+* Accurate transaction counting
 
 ---
 
@@ -105,36 +206,43 @@ xsim tb_pipeline_sim -run all
 
 ---
 
-## Key Design Decisions
+## Design Trade-offs
 
-1. **Single-entry buffering**
-   Ensures simple control and deterministic behavior
-
-2. **Registered outputs**
-   Avoids combinational hazards
-
-3. **Handshake-driven counting**
-   Transaction count updates only on:
-
-   ```systemverilog
-   valid && ready
-   ```
-
-4. **Backpressure-safe logic**
-   Data is never overwritten unless consumed
+| Aspect       | Choice          | Reason                 |
+| ------------ | --------------- | ---------------------- |
+| Buffer Depth | 1-stage         | Minimal latency        |
+| Control      | Valid-ready     | Industry standard      |
+| Counting     | Handshake-based | Accurate measurement   |
+| Storage      | Register        | Deterministic behavior |
 
 ---
 
-## Possible Extensions
+## Extensions
 
-* Multi-stage pipeline (FIFO)
-* AXI-Stream wrapper
-* Functional coverage
-* UVM-based verification
+* Multi-stage pipeline (FIFO design)
+* AXI-Stream interface adaptation
+* Formal verification
+* UVM-based testbench
+* Performance analysis (latency/throughput)
+
+---
+
+## Key Takeaways
+
+* Correct implementation of flow-controlled pipelines
+* Practical use of SystemVerilog verification features
+* Understanding of backpressure and timing hazards
+* Foundation for scalable hardware verification
 
 ---
 
 ## Author
 
-**Arya Dinesh**  
+**Arya Dinesh**
 B.Tech Electronics & Communication Engineering
+
+---
+
+## License
+
+Open-source for academic and learning purposes.
