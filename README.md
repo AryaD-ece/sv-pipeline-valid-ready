@@ -1,4 +1,4 @@
-#  SystemVerilog Valid-Ready Pipeline Verification
+# 🚀 SystemVerilog Valid-Ready Pipeline Verification
 
 <p align="center">
   <img src="https://img.shields.io/badge/SystemVerilog-Design%20%2B%20Verification-blue?style=for-the-badge">
@@ -8,50 +8,51 @@
 </p>
 
 <p align="center">
-  <b>Backpressure-aware, lossless 1-stage streaming pipeline (elastic buffer / register slice)</b><br>
-  Verified using a <b>self-checking constrained-random testbench</b> with assertion-driven validation.
+  <b>Backpressure-aware, lossless 1-stage streaming pipeline</b><br>
+  <sub>(Elastic Buffer / AXI-Stream Register Slice Equivalent)</sub>
 </p>
 
 ---
 
-## ⚡ Quick Overview
+## ⚡ Executive Summary
 
-| Aspect     | Detail                                    |
-| ---------- | ----------------------------------------- |
-| Problem    | Reliable data transfer under backpressure |
-| Solution   | Valid-Ready 1-stage pipeline              |
-| Guarantee  | No loss, no overwrite, ordered delivery   |
-| Latency    | 1 cycle                                   |
-| Throughput | 1 txn / cycle (no stalls)                 |
-| Result     | PASS 20 / 20                              |
+| Aspect     | Detail                                        |
+| ---------- | --------------------------------------------- |
+| Problem    | Reliable data transfer under backpressure     |
+| Solution   | 1-stage valid-ready pipeline (elastic buffer) |
+| Guarantee  | No data loss, no overwrite, in-order delivery |
+| Latency    | 1 cycle                                       |
+| Throughput | 1 txn / cycle (no stalls)                     |
+| Result     | PASS 20 / 20                                  |
 
 ---
 
-## 🧩 Problem
+## 🧩 Problem Statement
 
-Independent modules in synchronous systems operate at different rates. Without proper flow control:
+In synchronous digital systems, **producer and consumer operate at independent rates**.
+Without proper flow control:
 
-* ❌ Data loss under stalls
+* ❌ Data loss under backpressure
 * ❌ Overwrite of unconsumed data
 * ❌ Ordering violations
-* ❌ Unstable throughput
+* ❌ Non-deterministic throughput
 
 ---
 
 ## 🎯 Objective
 
-Design a pipeline stage that:
+Design and verify a pipeline stage that:
 
-* ✔ Ensures **lossless transfer**
+* ✔ Guarantees **lossless transfer**
 * ✔ Handles **arbitrary backpressure**
 * ✔ Preserves **strict ordering**
-* ✔ Provides **deterministic behavior**
+* ✔ Ensures **cycle-accurate deterministic behavior**
 
 ---
 
-## 🔗 Protocol
+## 🔗 Protocol Definition
 
-Transfer occurs **iff**:
+A transaction occurs **iff**:
 
 ```systemverilog
 valid && ready
@@ -61,71 +62,88 @@ valid && ready
 
 ## 🧠 Architecture
 
-<p align="center">
-  <img src="https://dummyimage.com/700x120/0f172a/ffffff&text=Producer+--(valid,data)--%3E+%5B+Pipeline+Stage+%5D+--%3E+Consumer" />
-</p>
+```mermaid
+flowchart LR
+    P[Producer] -->|valid, data| B["Pipeline Register - Elastic Buffer"]
+    B -->|data| C[Consumer]
+    C -->|ready| B
+
+    subgraph Internal Behavior
+        S1["EMPTY state<br/>slot_full = 0"]
+        S2["FULL state<br/>slot_full = 1"]
+    end
+
+    S1 -->|valid=1| S2
+    S2 -->|ready=1| S1
+```
 
 > Equivalent to a **1-depth elastic buffer / AXI-Stream register slice**
-
-| Property     | Value         |
-| ------------ | ------------- |
-| Latency      | 1 cycle       |
-| Throughput   | 1 txn / cycle |
-| Storage      | Single-entry  |
-| Backpressure | Lossless      |
 
 ---
 
 ## 🏗️ Design Summary
 
-* `data_reg` → holds data
-* `slot_full` → valid flag
-* `txn_count` → increments on handshake
+| Component   | Role                         |
+| ----------- | ---------------------------- |
+| `data_reg`  | Holds current transaction    |
+| `slot_full` | Indicates valid data present |
+| `txn_count` | Counts completed transfers   |
 
-| Condition     | Action  |
-| ------------- | ------- |
-| full + ready  | consume |
-| empty + valid | load    |
-| full + !ready | stall   |
+### Behavior
+
+| Condition     | Action            |
+| ------------- | ----------------- |
+| full + ready  | consume           |
+| empty + valid | load              |
+| full + !ready | stall (hold data) |
 
 ---
 
-## 🧪 Verification
+## 🧪 Verification Strategy
 
 ### Architecture
 
 * Generator
 * Driver
 * Monitor
-* Scoreboard
+* Scoreboard (mailbox-based)
 
 ### Stimulus
 
 * Random data
-* Random delays (1–5 cycles)
-* Random stalls (0–8 cycles)
+* Random delay (1–5 cycles)
+* Random backpressure (0–8 cycles)
 
 ---
 
-## 🧷 Assertions
+## 🧷 Assertions (SVA)
 
 ```systemverilog
-// handshake correctness
-assert property (@(posedge clk) valid && ready);
+// Transfer occurs only on handshake
+property handshake_transfer;
+  @(posedge clk) (valid && ready) |-> ##1 txn_count == $past(txn_count) + 1;
+endproperty
+assert property (handshake_transfer);
 
-// stability under stall
-assert property (@(posedge clk) valid && !ready |-> $stable(data));
+// Data must remain stable under backpressure
+property data_stable_on_stall;
+  @(posedge clk) (valid && !ready) |-> $stable(data_reg);
+endproperty
+assert property (data_stable_on_stall);
 
-// no overwrite
-assert property (@(posedge clk) slot_full && !ready |-> $stable(data_reg));
+// No overwrite before consumption
+property no_overwrite;
+  @(posedge clk) (slot_full && !ready) |-> $stable(data_reg);
+endproperty
+assert property (no_overwrite);
 ```
 
 ---
 
-## 📊 Coverage (Intent)
+## 📊 Functional Coverage
 
 ```systemverilog
-covergroup cg;
+covergroup handshake_cg @(posedge clk);
   coverpoint valid;
   coverpoint ready;
   cross valid, ready;
@@ -134,30 +152,66 @@ endgroup
 
 ---
 
-## 📈 Waveform
+## ⏱️ Timing Behavior
+
+```
+Clock      ─┐_┌─┐_┌─┐_┌─┐_┌─┐_┌─┐_┌─┐_┌─┐
+
+valid      ──■■■■■■■■────■■■■■■■■────────
+ready      ─────■■■■■■■■──────■■■■■■────
+data       === A === B === B === C === D ===
+
+handshake     ↑     ↑        ↑     ↑
+              A     B        C     D
+
+txn_count     0 → 1 → 2 → 2 → 3 → 4
+```
+
+### Interpretation
+
+* ✔ Transfer only when `valid && ready`
+* ✔ Data stable during stall
+* ✔ No overwrite
+* ✔ Count increments only on handshake
+
+---
+
+## 📈 Waveform Evidence
 
 <p align="center">
   <img src="waveform.png" width="850">
 </p>
 
-✔ Correct handshake
-✔ Stable under backpressure
-✔ No data loss
-✔ Accurate sequencing
+✔ Handshake correctness
+✔ Backpressure handling
+✔ Stable data
+✔ In-order execution
+
+---
+
+## 📌 Verification Results
+
+| Metric         | Status   |
+| -------------- | -------- |
+| Transactions   | 20       |
+| PASS           | 20       |
+| FAIL           | 0        |
+| Assertions     | PASS     |
+| Data Integrity | Verified |
 
 ---
 
 ## ⚙️ Performance
 
-| Metric     | Value       |
-| ---------- | ----------- |
-| Latency    | 1 cycle     |
-| Throughput | 1 txn/cycle |
-| Integrity  | Guaranteed  |
+| Metric       | Value       |
+| ------------ | ----------- |
+| Latency      | 1 cycle     |
+| Throughput   | 1 txn/cycle |
+| Backpressure | Lossless    |
 
 ---
 
-## ▶️ Run
+## ▶️ How to Run
 
 ```bash
 xvlog src/pipeline_dut.sv sim/transaction.sv sim/tb_pipeline.sv
@@ -167,44 +221,56 @@ xsim tb_pipeline_sim -run all
 
 ---
 
-## 📁 Structure
+## 📁 Repository Structure
 
 ```
 src/
+ └── pipeline_dut.sv
+
 sim/
+ ├── tb_pipeline.sv
+ └── transaction.sv
+
 waveform.png
 README.md
+.gitignore
 ```
 
 ---
 
-## ✅ Results
-
-PASS: **20 / 20**
-FAIL: **0**
-
----
-
-## 🏭 Relevance
+## 🏭 Industry Relevance
 
 * AXI-Stream pipelines
-* NoC routers
-* DSP streaming chains
+* Network-on-Chip routers
+* DSP streaming systems
 * FIFO front-end buffering
 
 ---
 
 ## 🔮 Extensions
 
-* FIFO (multi-stage)
-* Skid buffer
-* UVM testbench
-* Coverage metrics
-* Performance analysis
+* Multi-stage FIFO
+* Skid buffer design
+* AXI-Stream wrapper
+* UVM verification environment
+* Coverage closure metrics
 
 ---
 
-## Author
+## 🧠 Design Invariants
+
+```text
+1. Transfer ⇔ valid && ready
+2. Data stable when valid && !ready
+3. No overwrite before consumption
+4. txn_count increments only on handshake
+```
+
+---
+
+## 👤 Author
 
 **Arya Dinesh**  
 *B.Tech Electronics & Communication Engineering*
+
+---
